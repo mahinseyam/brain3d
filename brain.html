@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Brain Simulation</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden; /* Prevent scrollbars */
+            font-family: 'Inter', sans-serif;
+            background-color: #111827; /* Dark background */
+            color: #f3f4f6;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+        }
+        #info {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 10px 20px;
+            background-color: rgba(0, 0, 0, 0.7);
+            border-radius: 8px;
+            text-align: center;
+            font-size: 0.9em;
+            z-index: 100;
+        }
+        #messageBox {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: #374151; /* Darker gray */
+            color: #f3f4f6;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            z-index: 1000;
+            display: none; /* Hidden by default */
+            text-align: center;
+            max-width: 80%;
+        }
+        #messageBox button {
+            background-color: #4f46e5; /* Indigo */
+            color: white;
+            padding: 8px 15px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-top: 15px;
+        }
+        #messageBox button:hover {
+            background-color: #4338ca;
+        }
+        #loadingIndicator {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 1.5em;
+            color: #f3f4f6;
+            z-index: 1001; /* Above message box */
+            display: none; /* Hidden by default */
+        }
+        canvas {
+            display: block; /* Remove scrollbars if canvas is too big */
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="info">
+        <h1 class="text-xl font-semibold">3D Brain Visualization</h1>
+        <p class="text-sm">Drag to rotate, scroll to zoom.</p>
+    </div>
+
+    <div id="loadingIndicator">Loading Brain...</div>
+
+    <div id="messageBox">
+        <p id="messageText"></p>
+        <button id="messageButton">OK</button>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        // Import necessary modules from three.js
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+        // Scene, Camera, Renderer
+        let scene, camera, renderer;
+        // Brain model
+        let brainModel;
+        // Controls for camera
+        let controls;
+        
+        // Flag to track if the main GLTF model loaded successfully
+        let gtlfModelSuccessfullyLoaded = false;
+        // URL for the brain model, declared here to be accessible by multiple functions
+        let brainModelUrl;
+
+        // Loading manager
+        const loadingManager = new THREE.LoadingManager();
+        const gltfLoader = new GLTFLoader(loadingManager);
+
+        // DOM Elements
+        const loadingIndicator = document.getElementById('loadingIndicator');
+        const infoDiv = document.getElementById('info');
+        const messageBox = document.getElementById('messageBox');
+        const messageText = document.getElementById('messageText');
+        const messageButton = document.getElementById('messageButton');
+
+        messageButton.addEventListener('click', () => {
+            messageBox.style.display = 'none';
+        });
+
+        function showMessage(message) {
+            messageText.textContent = message;
+            messageBox.style.display = 'block';
+        }
+
+        // Loading manager callbacks
+        loadingManager.onStart = function (url, itemsLoaded, itemsTotal) {
+            console.log('Loading Manager: Started loading file: ' + url + '.\nLoaded ' + itemsLoaded + ' of ' + itemsTotal + ' files.');
+            loadingIndicator.style.display = 'block';
+            infoDiv.style.display = 'none'; // Hide info while loading
+        };
+
+        loadingManager.onLoad = function () {
+            console.log('Loading Manager: Loading complete!');
+            loadingIndicator.style.display = 'none';
+            infoDiv.style.display = 'block'; // Show info after loading
+
+            if (brainModel) {
+                // Add the model to the scene if it hasn't been added already (e.g., by fallback)
+                if (!scene.children.includes(brainModel)) {
+                    scene.add(brainModel);
+                }
+
+                // Apply specific transformations only if the GLTF model was successfully loaded
+                if (gtlfModelSuccessfullyLoaded) {
+                    brainModel.scale.set(2, 2, 2); 
+                    brainModel.position.y = 0;
+                }
+                // Start animation loop
+                animate();
+            } else {
+                // This case should ideally not be reached if GLTF loader's error handling is robust
+                console.error("Loading Manager: onLoad completed, but no model (GLTF or fallback) is available.");
+                showMessage("Could not display the 3D model or a fallback. Please try refreshing the page.");
+            }
+        };
+
+        loadingManager.onError = function (url) {
+            console.error('Loading Manager: Error loading URL: ' + url);
+            loadingIndicator.style.display = 'none';
+            infoDiv.style.display = 'block';
+
+            // If the error is for the brain model URL and it wasn't successfully loaded (meaning fallback is active),
+            // the GLTF loader's specific error handler below should have already shown a message.
+            // Avoid showing a generic "refresh" message in that case.
+            if (url === brainModelUrl && !gtlfModelSuccessfullyLoaded) {
+                console.log("Loading Manager: Brain model GLB failed to load. Fallback mechanism should be active via GLTFLoader's onError.");
+                // The message from GLTFLoader's onError is more specific, so we don't overwrite it.
+            } else if (url !== brainModelUrl) {
+                // For errors with other assets (if any were added)
+                showMessage('An error occurred while loading some assets. The scene might be incomplete.');
+            } else {
+                // Fallback message if GLTF loader somehow didn't handle its own error message for the brain model
+                 if (!messageBox.style.display || messageBox.style.display === 'none') {
+                    showMessage('An unexpected error occurred while loading the brain model. A fallback may be displayed.');
+                 }
+            }
+        };
+
+
+        function init() {
+            // Define the brain model URL
+            brainModelUrl = 'https://storage.googleapis.com/canvas-storytelling/brain-hemispheres.glb';
+            // const brainModelUrl = 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/models/gltf/BrainStem.glb'; // Alternative
+
+            // Scene setup
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x111827); 
+
+            // Camera setup
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 7; 
+
+            // Renderer setup
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio); 
+            document.body.appendChild(renderer.domElement);
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.8); 
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 1.2); 
+            directionalLight.position.set(5, 10, 7.5);
+            scene.add(directionalLight);
+            const pointLight = new THREE.PointLight(0xffccaa, 0.7, 100); 
+            pointLight.position.set(-5, -5, 5);
+            scene.add(pointLight);
+
+            // OrbitControls setup
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true; 
+            controls.dampingFactor = 0.05;
+            controls.screenSpacePanning = false;
+            controls.minDistance = 2; 
+            controls.maxDistance = 20; 
+            controls.maxPolarAngle = Math.PI / 1.8; 
+            controls.minPolarAngle = Math.PI / 4; 
+
+            // Load the GLTF Brain Model
+            gltfLoader.load(
+                brainModelUrl,
+                function (gltf) { // Success callback
+                    console.log("GLTF Loader: Brain model loaded successfully.");
+                    gtlfModelSuccessfullyLoaded = true; // Set flag
+                    brainModel = gltf.scene;
+                    brainModel.traverse(function (child) {
+                        if (child.isMesh) {
+                            child.material.metalness = 0.3;
+                            child.material.roughness = 0.6;
+                        }
+                    });
+                    // The model will be added to the scene and animation started by loadingManager.onLoad
+                },
+                function (xhr) { // Progress callback
+                    if (xhr.lengthComputable) {
+                        console.log('GLTF Loader: ' + (xhr.loaded / xhr.total * 100) + '% loaded');
+                    } else {
+                        console.log('GLTF Loader: Loading progress (total size unknown)... ' + xhr.loaded + ' bytes loaded.');
+                    }
+                },
+                function (error) { // Error callback for GLTFLoader
+                    console.error('GLTF Loader: An error happened while loading the brain model:', error);
+                    gtlfModelSuccessfullyLoaded = false; // Ensure flag is false
+                    
+                    // Show a specific message about the fallback
+                    showMessage('Failed to load the primary 3D brain model (e.g., network or CORS issue). Displaying a fallback representation instead.');
+                    
+                    createFallbackBrain(); // Create the fallback sphere
+                    scene.add(brainModel); // Add fallback to the scene immediately
+
+                    // Hide loading indicator and show info
+                    loadingIndicator.style.display = 'none';
+                    infoDiv.style.display = 'block';
+                    
+                    animate(); // Start animation loop with the fallback model
+                }
+            );
+
+            // Handle window resize
+            window.addEventListener('resize', onWindowResize, false);
+        }
+
+        function createFallbackBrain() {
+            console.log("Creating fallback brain (sphere).");
+            // Fallback: Create a sphere with some "brain-like" material
+            const geometry = new THREE.SphereGeometry(1.5, 64, 64); 
+
+            const canvas = document.createElement('canvas');
+            canvas.width = 256;
+            canvas.height = 256;
+            const context = canvas.getContext('2d');
+            context.fillStyle = '#FFC0CB'; // Pink base
+            context.fillRect(0, 0, 256, 256);
+            for (let i = 0; i < 1000; i++) {
+                context.fillStyle = `rgba(255, 170, 180, ${Math.random() * 0.5 + 0.2})`; 
+                context.beginPath();
+                context.arc(Math.random() * 256, Math.random() * 256, Math.random() * 10 + 2, 0, Math.PI * 2);
+                context.fill();
+            }
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.wrapS = THREE.RepeatWrapping;
+            texture.wrapT = THREE.RepeatWrapping;
+
+            const material = new THREE.MeshStandardMaterial({
+                map: texture,
+                roughness: 0.6,
+                metalness: 0.2,
+            });
+
+            brainModel = new THREE.Mesh(geometry, material);
+            brainModel.scale.set(1.5, 1.5, 1.5); // Adjust scale for fallback
+        }
+
+
+        function onWindowResize() {
+            if (camera && renderer) {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+        }
+
+        // Animation loop
+        let pulseFactor = 0;
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (controls) controls.update();
+
+            // "Simulation" effect
+            if (brainModel) {
+                if (!gtlfModelSuccessfullyLoaded) { // If it's the fallback sphere
+                    pulseFactor += 0.02;
+                    const scaleBase = 1.5; // Base scale for fallback
+                    const pulseAmount = 0.03;
+                    const currentScale = scaleBase + Math.sin(pulseFactor) * pulseAmount;
+                    brainModel.scale.set(currentScale, currentScale, currentScale);
+                } else {
+                    // brainModel.rotation.y += 0.001; // Optional slow rotation for loaded GLTF
+                }
+            }
+            
+            if (renderer && scene && camera) renderer.render(scene, camera);
+        }
+
+        // Initialize and start everything
+        try {
+            init();
+            // Animation loop is started by loadingManager.onLoad or by GLTFLoader's error callback (for fallback)
+        } catch (error) {
+            console.error("Initialization failed:", error);
+            showMessage("Sorry, a critical error occurred and the 3D scene could not be started. Please try refreshing.");
+            loadingIndicator.style.display = 'none';
+            infoDiv.style.display = 'block';
+        }
+
+    </script>
+</body>
+</html>
